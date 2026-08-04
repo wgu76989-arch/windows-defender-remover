@@ -46,8 +46,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $tag = '${{ steps.ver.outputs.tag }}'
 
-          # Stage files for payload
           New-Item -ItemType Directory -Force -Path 'payload' | Out-Null
           Copy-Item 'Script_Run.bat' 'payload\'
           Copy-Item 'files_removal.bat' 'payload\'
@@ -56,47 +56,30 @@ jobs:
           Copy-Item 'Remove_Defender' 'payload\Remove_Defender' -Recurse -Force
           Copy-Item 'Remove_SecurityComp' 'payload\Remove_SecurityComp' -Recurse -Force
 
-          # Create payload.zip
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           [System.IO.Compression.ZipFile]::CreateFromDirectory(
             "$PWD\payload", "$PWD\payload.zip",
             [System.IO.Compression.CompressionLevel]::Optimal, $false)
           Write-Host "payload.zip: $((Get-Item 'payload.zip').Length) bytes"
 
-          # Find System.IO.Compression.dll in GAC
           $compDll = (Get-ChildItem 'C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.IO.Compression' -Recurse -Filter 'System.IO.Compression.dll' | Select-Object -First 1).FullName
           if (-not $compDll) { throw 'System.IO.Compression.dll not found in GAC' }
 
-          # Compile with .NET Framework csc.exe
           $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-          $exeName = "DefenderRemover_${{ steps.ver.outputs.tag }}.exe"
-          & $csc /nologo /optimize+ `
-            "/out:$exeName" `
-            "/reference:$compDll" `
-            '/resource:payload.zip' `
-            '/win32icon:app_icon.ico' `
-            '/target:exe' `
-            'sfx\Program.cs' 2>&1 | ForEach-Object { Write-Host $_ }
+          $exeName = "DefenderRemover_$tag.exe"
+          & $csc /nologo /optimize+ "/out:$exeName" "/reference:$compDll" '/resource:payload.zip' '/win32icon:app_icon.ico' '/target:exe' 'sfx\Program.cs' 2>&1 | ForEach-Object { Write-Host $_ }
           if ($LASTEXITCODE -ne 0) { throw "csc.exe exited with code $LASTEXITCODE" }
           if (-not (Test-Path $exeName)) { throw "Failed to compile $exeName" }
           Write-Host "Created $exeName ($((Get-Item $exeName).Length) bytes)"
 
-          # Set version info
-          .\rcedit.exe $exeName `
-            --set-version-string 'ProductName' 'Defender Remover' `
-            --set-version-string 'CompanyName' 'Gallery Inc' `
-            --set-version-string 'FileDescription' 'Defender Remover' `
-            --set-version-string 'LegalCopyright' 'Gallery Inc' `
-            --set-version-string 'FileVersion' '${{ steps.ver.outputs.vnum }}' `
-            --set-version-string 'ProductVersion' '${{ steps.ver.outputs.vnum }}' `
-            --set-file-version '${{ steps.ver.outputs.v4 }}' `
-            --set-product-version '${{ steps.ver.outputs.v4 }}'
+          .\rcedit.exe $exeName --set-version-string 'ProductName' 'Defender Remover' --set-version-string 'CompanyName' 'Gallery Inc' --set-version-string 'FileDescription' 'Defender Remover' --set-version-string 'LegalCopyright' 'Gallery Inc' --set-version-string 'FileVersion' '${{ steps.ver.outputs.vnum }}' --set-version-string 'ProductVersion' '${{ steps.ver.outputs.vnum }}' --set-file-version '${{ steps.ver.outputs.v4 }}' --set-product-version '${{ steps.ver.outputs.v4 }}'
           Write-Host "Version info set"
 
       - name: Package raw scripts (zip)
         shell: pwsh
         run: |
-          $staging = "staging\DefenderRemover_${{ steps.ver.outputs.tag }}"
+          $tag = '${{ steps.ver.outputs.tag }}'
+          $staging = "staging\DefenderRemover_$tag"
           New-Item -ItemType Directory -Force -Path $staging | Out-Null
           $exclude = @('.git', '.github', 'site-res', 'staging', 'sfx', 'payload')
           Get-ChildItem -Force | Where-Object {
@@ -109,14 +92,15 @@ jobs:
           } | ForEach-Object {
             Copy-Item -Path $_.FullName -Destination $staging -Recurse -Force
           }
-          $zip = "DefenderRemover_${{ steps.ver.outputs.tag }}.zip"
+          $zip = "DefenderRemover_$tag.zip"
           Compress-Archive -Path "$staging\*" -DestinationPath $zip -CompressionLevel Optimal
           Write-Host "Created $zip"
 
       - name: Package ISO Maker (zip)
         shell: pwsh
         run: |
-          $isoZip = "ISOMaker_${{ steps.ver.outputs.tag }}.zip"
+          $tag = '${{ steps.ver.outputs.tag }}'
+          $isoZip = "ISOMaker_$tag.zip"
           if (Test-Path "ISO_Maker") {
             Compress-Archive -Path "ISO_Maker\*" -DestinationPath $isoZip -CompressionLevel Optimal
             Write-Host "Created $isoZip"
@@ -125,14 +109,15 @@ jobs:
       - name: Generate checksums
         shell: pwsh
         run: |
-          Get-ChildItem -Filter "*.zip" | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
-            "$hash  $($_.Name)" | Out-File -FilePath "SHA256SUMS.txt" -Append -Encoding ascii
-          }
-          $exeFile = Get-ChildItem -Filter "DefenderRemover_${{ steps.ver.outputs.tag }}.exe" -ErrorAction SilentlyContinue
-          if ($exeFile) {
-            $hash = (Get-FileHash $exeFile.FullName -Algorithm SHA256).Hash
-            "$hash  $($exeFile.Name)" | Out-File -FilePath "SHA256SUMS.txt" -Append -Encoding ascii
+          $tag = '${{ steps.ver.outputs.tag }}'
+          # Only checksum release assets, not build artifacts like payload.zip
+          $releaseFiles = @()
+          $releaseFiles += (Get-ChildItem -Filter "DefenderRemover_$tag.exe" -ErrorAction SilentlyContinue)
+          $releaseFiles += (Get-ChildItem -Filter "DefenderRemover_$tag.zip" -ErrorAction SilentlyContinue)
+          $releaseFiles += (Get-ChildItem -Filter "ISOMaker_$tag.zip" -ErrorAction SilentlyContinue)
+          foreach ($f in $releaseFiles) {
+            $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
+            "$hash  $($f.Name)" | Out-File -FilePath "SHA256SUMS.txt" -Append -Encoding ascii
           }
           Get-Content "SHA256SUMS.txt"
 
@@ -162,5 +147,6 @@ jobs:
           prerelease: ${{ github.event.inputs.prerelease }}
           files: |
             DefenderRemover_${{ steps.ver.outputs.tag }}.exe
-            *.zip
+            DefenderRemover_${{ steps.ver.outputs.tag }}.zip
+            ISOMaker_${{ steps.ver.outputs.tag }}.zip
             SHA256SUMS.txt

@@ -51,13 +51,13 @@ class DefenderRemoverSFX
         // Auto-detect entry point: GUI takes priority over CLI
         string guiPath = Path.Combine(baseDir, "DefenderGUI.exe");
         string cliPath = Path.Combine(baseDir, "Script_Run.bat");
-        string entry = File.Exists(guiPath) ? guiPath : cliPath;
+        string entryPoint = File.Exists(guiPath) ? guiPath : cliPath;
 
-        if (File.Exists(entry))
+        if (File.Exists(entryPoint))
         {
             var proc = Process.Start(new ProcessStartInfo
             {
-                FileName = entry,
+                FileName = entryPoint,
                 WorkingDirectory = baseDir,
                 UseShellExecute = false
             });

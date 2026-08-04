@@ -42,86 +42,139 @@ jobs:
         run: |
           Invoke-WebRequest -Uri 'https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe' -OutFile 'rcedit.exe' -UseBasicParsing
 
-      - name: Build DefenderRemover.exe
+      - name: Build GUI exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          & $csc /nologo /optimize+ /out:DefenderGUI.exe /win32icon:app_icon.ico /target:winexe gui\Program.cs 2>&1 | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { throw "csc.exe exited with code $LASTEXITCODE" }
+          if (-not (Test-Path 'DefenderGUI.exe')) { throw 'Failed to compile DefenderGUI.exe' }
+          Write-Host "DefenderGUI.exe: $((Get-Item 'DefenderGUI.exe').Length) bytes"
+          .\rcedit.exe DefenderGUI.exe `
+            --set-version-string 'ProductName' 'Defender Remover' `
+            --set-version-string 'CompanyName' 'Gallery Inc' `
+            --set-version-string 'FileDescription' 'Windows Defender GUI' `
+            --set-version-string 'LegalCopyright' 'Gallery Inc' `
+            --set-version-string 'FileVersion' '${{ steps.ver.outputs.vnum }}' `
+            --set-version-string 'ProductVersion' '${{ steps.ver.outputs.vnum }}' `
+            --set-file-version '${{ steps.ver.outputs.v4 }}' `
+            --set-product-version '${{ steps.ver.outputs.v4 }}'
+          Write-Host 'GUI version info set'
+
+      - name: Build GUI SFX (standalone exe)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $tag = '${{ steps.ver.outputs.tag }}'
-
-          New-Item -ItemType Directory -Force -Path 'payload' | Out-Null
-          Copy-Item 'Script_Run.bat' 'payload\'
-          Copy-Item 'files_removal.bat' 'payload\'
-          Copy-Item 'RemoveSecHealthApp.ps1' 'payload\'
-          Copy-Item 'PowerRun.exe' 'payload\'
-          Copy-Item 'Remove_Defender' 'payload\Remove_Defender' -Recurse -Force
-          Copy-Item 'Remove_SecurityComp' 'payload\Remove_SecurityComp' -Recurse -Force
-
+          # Stage GUI payload: GUI exe + all support files
+          New-Item -ItemType Directory -Force -Path 'gui-payload' | Out-Null
+          Copy-Item 'DefenderGUI.exe' 'gui-payload\'
+          Copy-Item 'Script_Run.bat' 'gui-payload\'
+          Copy-Item 'files_removal.bat' 'gui-payload\'
+          Copy-Item 'RemoveSecHealthApp.ps1' 'gui-payload\'
+          Copy-Item 'PowerRun.exe' 'gui-payload\'
+          Copy-Item 'Remove_Defender' 'gui-payload\Remove_Defender' -Recurse -Force
+          Copy-Item 'Remove_SecurityComp' 'gui-payload\Remove_SecurityComp' -Recurse -Force
+          # Create payload.zip
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          [System.IO.Compression.ZipFile]::CreateFromDirectory(
-            "$PWD\payload", "$PWD\payload.zip",
-            [System.IO.Compression.CompressionLevel]::Optimal, $false)
-          Write-Host "payload.zip: $((Get-Item 'payload.zip').Length) bytes"
-
+          [System.IO.Compression.ZipFile]::CreateFromDirectory("$PWD\gui-payload", "$PWD\gui-payload.zip", [System.IO.Compression.CompressionLevel]::Optimal, $false)
+          Write-Host "gui-payload.zip: $((Get-Item 'gui-payload.zip').Length) bytes"
+          # Find compression DLL
           $compDll = (Get-ChildItem 'C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.IO.Compression' -Recurse -Filter 'System.IO.Compression.dll' | Select-Object -First 1).FullName
-          if (-not $compDll) { throw 'System.IO.Compression.dll not found in GAC' }
-
+          # Compile SFX (winexe = no console window)
           $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-          $exeName = "DefenderRemover_$tag.exe"
-          & $csc /nologo /optimize+ "/out:$exeName" "/reference:$compDll" '/resource:payload.zip' '/win32icon:app_icon.ico' '/target:exe' 'sfx\Program.cs' 2>&1 | ForEach-Object { Write-Host $_ }
-          if ($LASTEXITCODE -ne 0) { throw "csc.exe exited with code $LASTEXITCODE" }
-          if (-not (Test-Path $exeName)) { throw "Failed to compile $exeName" }
-          Write-Host "Created $exeName ($((Get-Item $exeName).Length) bytes)"
+          $sfxName = "DefenderGUI_$tag.exe"
+          & $csc /nologo /optimize+ "/out:$sfxName" "/reference:$compDll" '/resource:gui-payload.zip' '/win32icon:app_icon.ico' '/target:winexe' 'sfx\Program.cs' 2>&1 | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { throw "SFX compile failed ($LASTEXITCODE)" }
+          Write-Host "Created $sfxName ($((Get-Item $sfxName).Length) bytes)"
 
-          .\rcedit.exe $exeName --set-version-string 'ProductName' 'Defender Remover' --set-version-string 'CompanyName' 'Gallery Inc' --set-version-string 'FileDescription' 'Defender Remover' --set-version-string 'LegalCopyright' 'Gallery Inc' --set-version-string 'FileVersion' '${{ steps.ver.outputs.vnum }}' --set-version-string 'ProductVersion' '${{ steps.ver.outputs.vnum }}' --set-file-version '${{ steps.ver.outputs.v4 }}' --set-product-version '${{ steps.ver.outputs.v4 }}'
-          Write-Host "Version info set"
+      - name: Build CLI SFX
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = '${{ steps.ver.outputs.tag }}'
+          New-Item -ItemType Directory -Force -Path 'cli-payload' | Out-Null
+          Copy-Item 'Script_Run.bat' 'cli-payload\'
+          Copy-Item 'files_removal.bat' 'cli-payload\'
+          Copy-Item 'RemoveSecHealthApp.ps1' 'cli-payload\'
+          Copy-Item 'PowerRun.exe' 'cli-payload\'
+          Copy-Item 'Remove_Defender' 'cli-payload\Remove_Defender' -Recurse -Force
+          Copy-Item 'Remove_SecurityComp' 'cli-payload\Remove_SecurityComp' -Recurse -Force
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory("$PWD\cli-payload", "$PWD\cli-payload.zip", [System.IO.Compression.CompressionLevel]::Optimal, $false)
+          $compDll = (Get-ChildItem 'C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.IO.Compression' -Recurse -Filter 'System.IO.Compression.dll' | Select-Object -First 1).FullName
+          $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          $sfxName = "DefenderRemover_$tag.exe"
+          & $csc /nologo /optimize+ "/out:$sfxName" "/reference:$compDll" '/resource:cli-payload.zip' '/win32icon:app_icon.ico' '/target:exe' 'sfx\Program.cs' 2>&1 | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { throw "SFX compile failed ($LASTEXITCODE)" }
+          Write-Host "Created $sfxName ($((Get-Item $sfxName).Length) bytes)"
 
-      - name: Package raw scripts (zip)
+      - name: Package GUI zip
         shell: pwsh
         run: |
           $tag = '${{ steps.ver.outputs.tag }}'
-          $staging = "staging\DefenderRemover_$tag"
+          New-Item -ItemType Directory -Force -Path "gui-staging" | Out-Null
+          Copy-Item 'DefenderGUI.exe' 'gui-staging\'
+          Copy-Item 'Script_Run.bat' 'gui-staging\'
+          Copy-Item 'files_removal.bat' 'gui-staging\'
+          Copy-Item 'RemoveSecHealthApp.ps1' 'gui-staging\'
+          Copy-Item 'PowerRun.exe' 'gui-staging\'
+          Copy-Item 'Remove_Defender' 'gui-staging\Remove_Defender' -Recurse -Force
+          Copy-Item 'Remove_SecurityComp' 'gui-staging\Remove_SecurityComp' -Recurse -Force
+          Compress-Archive -Path "gui-staging\*" -DestinationPath "DefenderGUI_$tag.zip" -CompressionLevel Optimal
+          Write-Host "Created DefenderGUI_$tag.zip"
+
+      - name: Package CLI zip
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.ver.outputs.tag }}'
+          $staging = "cli-staging\DefenderRemover_$tag"
           New-Item -ItemType Directory -Force -Path $staging | Out-Null
-          $exclude = @('.git', '.github', 'site-res', 'staging', 'sfx', 'payload')
+          $exclude = @('.git', '.github', 'site-res', 'sfx', 'gui', 'gui-staging', 'cli-staging', 'gui-payload', 'cli-payload')
           Get-ChildItem -Force | Where-Object {
             $exclude -notcontains $_.Name -and
-            $_.Name -notlike 'DefenderRemover_*' -and
-            $_.Name -notlike 'ISOMaker_*' -and
+            $_.Name -notlike 'DefenderGUI*' -and
+            $_.Name -notlike 'DefenderRemover*' -and
+            $_.Name -notlike 'ISOMaker*' -and
             $_.Name -ne 'rcedit.exe' -and
-            $_.Name -ne 'payload.zip' -and
+            $_.Name -ne '*.zip' -and
             $_.Name -ne 'SHA256SUMS.txt'
           } | ForEach-Object {
             Copy-Item -Path $_.FullName -Destination $staging -Recurse -Force
           }
-          $zip = "DefenderRemover_$tag.zip"
-          Compress-Archive -Path "$staging\*" -DestinationPath $zip -CompressionLevel Optimal
-          Write-Host "Created $zip"
+          Compress-Archive -Path "$staging\*" -DestinationPath "DefenderRemover_$tag.zip" -CompressionLevel Optimal
+          Write-Host "Created DefenderRemover_$tag.zip"
 
-      - name: Package ISO Maker (zip)
+      - name: Package ISO Maker
         shell: pwsh
         run: |
           $tag = '${{ steps.ver.outputs.tag }}'
-          $isoZip = "ISOMaker_$tag.zip"
-          if (Test-Path "ISO_Maker") {
-            Compress-Archive -Path "ISO_Maker\*" -DestinationPath $isoZip -CompressionLevel Optimal
-            Write-Host "Created $isoZip"
+          if (Test-Path 'ISO_Maker') {
+            Compress-Archive -Path 'ISO_Maker\*' -DestinationPath "ISOMaker_$tag.zip" -CompressionLevel Optimal
+            Write-Host "Created ISOMaker_$tag.zip"
           }
 
       - name: Generate checksums
         shell: pwsh
         run: |
           $tag = '${{ steps.ver.outputs.tag }}'
-          # Only checksum release assets, not build artifacts like payload.zip
-          $releaseFiles = @()
-          $releaseFiles += (Get-ChildItem -Filter "DefenderRemover_$tag.exe" -ErrorAction SilentlyContinue)
-          $releaseFiles += (Get-ChildItem -Filter "DefenderRemover_$tag.zip" -ErrorAction SilentlyContinue)
-          $releaseFiles += (Get-ChildItem -Filter "ISOMaker_$tag.zip" -ErrorAction SilentlyContinue)
-          foreach ($f in $releaseFiles) {
-            $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
-            "$hash  $($f.Name)" | Out-File -FilePath "SHA256SUMS.txt" -Append -Encoding ascii
+          $files = @(
+            "DefenderGUI_$tag.exe",
+            "DefenderGUI_$tag.zip",
+            "DefenderRemover_$tag.exe",
+            "DefenderRemover_$tag.zip",
+            "ISOMaker_$tag.zip"
+          )
+          foreach ($f in $files) {
+            if (Test-Path $f) {
+              $hash = (Get-FileHash $f -Algorithm SHA256).Hash
+              "$hash  $f" | Out-File -FilePath 'SHA256SUMS.txt' -Append -Encoding ascii
+            }
           }
-          Get-Content "SHA256SUMS.txt"
+          Get-Content 'SHA256SUMS.txt'
 
-      - name: Create release and upload assets
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
@@ -129,23 +182,21 @@ jobs:
           body: |
             ## Windows Defender Remover ${{ steps.ver.outputs.tag }}
 
-            Automated build from source via GitHub Actions.
+            ### GUI (recommended)
+            - **DefenderGUI_${{ steps.ver.outputs.tag }}.exe** - Standalone GUI (self-extracting, double-click to run)
+            - **DefenderGUI_${{ steps.ver.outputs.tag }}.zip** - GUI + support files
 
-            ### Downloads
-            - **DefenderRemover_${{ steps.ver.outputs.tag }}.exe** - Standalone executable (self-extracting, runs Script_Run.bat automatically)
-            - **DefenderRemover_${{ steps.ver.outputs.tag }}.zip** - Raw scripts (Script_Run.bat, registry files, PowerRun.exe)
+            ### CLI
+            - **DefenderRemover_${{ steps.ver.outputs.tag }}.exe** - Standalone CLI (self-extracting)
+            - **DefenderRemover_${{ steps.ver.outputs.tag }}.zip** - Raw scripts
+
+            ### Other
             - **ISOMaker_${{ steps.ver.outputs.tag }}.zip** - ISO integration files
-            - **SHA256SUMS.txt** - Checksums for all files
-
-            ### Usage (exe)
-            1. Download DefenderRemover_${{ steps.ver.outputs.tag }}.exe
-            2. Right-click and Run as administrator
-            3. Choose [Y] to remove Defender + Security App, or [A] to keep Security App
-            4. Reboot when prompted
-
-            Requires Windows 10/11. A System Restore point is recommended before use.
+            - **SHA256SUMS.txt** - Checksums
           prerelease: ${{ github.event.inputs.prerelease }}
           files: |
+            DefenderGUI_${{ steps.ver.outputs.tag }}.exe
+            DefenderGUI_${{ steps.ver.outputs.tag }}.zip
             DefenderRemover_${{ steps.ver.outputs.tag }}.exe
             DefenderRemover_${{ steps.ver.outputs.tag }}.zip
             ISOMaker_${{ steps.ver.outputs.tag }}.zip

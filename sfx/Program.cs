@@ -1,6 +1,6 @@
-// DefenderRemover SFX Wrapper
-// Extracts embedded payload.zip to temp dir and runs Script_Run.bat
-// Compiled with .NET Framework csc.exe (no runtime dependency beyond .NET FX 4.5+)
+﻿// DefenderRemover SFX Wrapper
+// Extracts embedded payload.zip to temp dir and runs the entry point.
+// Auto-detects: runs DefenderGUI.exe if present, otherwise Script_Run.bat
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -48,12 +48,20 @@ class DefenderRemoverSFX
             }
         }
 
-        var proc = Process.Start(new ProcessStartInfo
+        // Auto-detect entry point: GUI takes priority over CLI
+        string guiPath = Path.Combine(baseDir, "DefenderGUI.exe");
+        string cliPath = Path.Combine(baseDir, "Script_Run.bat");
+        string entry = File.Exists(guiPath) ? guiPath : cliPath;
+
+        if (File.Exists(entry))
         {
-            FileName = Path.Combine(baseDir, "Script_Run.bat"),
-            WorkingDirectory = baseDir,
-            UseShellExecute = false
-        });
-        proc.WaitForExit();
+            var proc = Process.Start(new ProcessStartInfo
+            {
+                FileName = entry,
+                WorkingDirectory = baseDir,
+                UseShellExecute = false
+            });
+            proc.WaitForExit();
+        }
     }
 }

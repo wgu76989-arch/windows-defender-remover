@@ -353,15 +353,31 @@ namespace DefenderRemoverGUI
                 var psi = new ProcessStartInfo
                 {
                     FileName = Path.Combine(workDir, exe),
-                    Arguments = args, WorkingDirectory = workDir,
-                    UseShellExecute = false, CreateNoWindow = true,
-                    WindowStyle = ProcessWindowStyle.Hidden
+                    Arguments = args,
+                    WorkingDirectory = workDir,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
                 };
-                using (var p = Process.Start(psi)) { p.WaitForExit(); return p.ExitCode; }
+                using (var p = Process.Start(psi))
+                {
+                    string stdout = p.StandardOutput.ReadToEnd();
+                    string stderr = p.StandardError.ReadToEnd();
+                    p.WaitForExit();
+                    if (!string.IsNullOrWhiteSpace(stdout))
+                        foreach (var ln in stdout.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
+                            if (!string.IsNullOrWhiteSpace(ln)) Log("    " + ln.Trim());
+                    if (!string.IsNullOrWhiteSpace(stderr))
+                        foreach (var ln in stderr.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
+                            if (!string.IsNullOrWhiteSpace(ln)) Log("    " + ln.Trim());
+                    return p.ExitCode;
+                }
             }
             catch (Exception ex)
             {
-                Log("  \u2716 \u5f02\u5e38\uff1a" + ex.Message);
+                Log("  ✖ 异常：" + ex.Message);
                 return -1;
             }
         }
@@ -451,8 +467,8 @@ namespace DefenderRemoverGUI
         {
             try
             {
-                Run("powershell.exe", "-NoProfile -Command \"Enable-ComputerRestore -Drive C:\\\"");
-                Run("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -Command \"Checkpoint-Computer -Description 'DefenderRemover' -RestorePointType MODIFY_SETTINGS\"");
+                Run("powershell.exe", "-NoProfile -WindowStyle Hidden -Command \"Enable-ComputerRestore -Drive C:\\\"");
+                Run("powershell.exe", "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"Checkpoint-Computer -Description 'DefenderRemover' -RestorePointType MODIFY_SETTINGS\"");
             }
             catch (Exception ex)
             {
@@ -465,7 +481,7 @@ namespace DefenderRemoverGUI
             SetStatus("\u6b63\u5728\u79fb\u9664 Windows \u5b89\u5168\u4e2d\u5fc3...");
             Log("\u6b63\u5728\u79fb\u9664 Windows \u5b89\u5168\u4e2d\u5fc3 UWP \u5e94\u7528...");
             SetProgStyle(ProgressBarStyle.Marquee);
-            Run("PowerRun.exe", "powershell.exe -noprofile -executionpolicy bypass -file \"RemoveSecHealthApp.ps1\"");
+            Run("PowerRun.exe", "powershell.exe -WindowStyle Hidden -noprofile -executionpolicy bypass -file \"RemoveSecHealthApp.ps1\"");
             curStep++;
             SetProg(curStep * 100 / totalSteps);
             Log("\u2713 \u5b89\u5168\u4e2d\u5fc3\u5e94\u7528\u5df2\u79fb\u9664");
@@ -497,7 +513,9 @@ namespace DefenderRemoverGUI
             for (int i = 0; i < dirs.Length; i++)
             {
                 Log("\u6b63\u5728\u5220\u9664 (" + (i + 1) + "/" + dirs.Length + ")\uff1a" + dirs[i]);
-                Run("PowerRun.exe", "cmd.exe /c takeown /f \"" + dirs[i] + "\" /r /d y && icacls \"" + dirs[i] + "\" /grant administrators:F /t && rd /s /q \"" + dirs[i] + "\"");
+                string d = dirs[i];
+                string ps = "-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command \"takeown /f '' + d + '' /r /d y; icacls '' + d + '' /grant administrators:F /t; Remove-Item -LiteralPath '' + d + '' -Recurse -Force -ErrorAction SilentlyContinue\"";
+                Run("PowerRun.exe", "powershell.exe " + ps);
                 curStep++;
                 SetProg(curStep * 100 / totalSteps);
             }

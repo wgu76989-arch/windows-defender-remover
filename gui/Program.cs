@@ -481,7 +481,7 @@ namespace DefenderRemoverGUI
             SetStatus("\u6b63\u5728\u79fb\u9664 Windows \u5b89\u5168\u4e2d\u5fc3...");
             Log("\u6b63\u5728\u79fb\u9664 Windows \u5b89\u5168\u4e2d\u5fc3 UWP \u5e94\u7528...");
             SetProgStyle(ProgressBarStyle.Marquee);
-            Run("PowerRun.exe", "powershell.exe -WindowStyle Hidden -noprofile -executionpolicy bypass -file \"RemoveSecHealthApp.ps1\"");
+            Run("PowerRun.exe", "RunHidden.exe powershell.exe -WindowStyle Hidden -noprofile -executionpolicy bypass -file \"RemoveSecHealthApp.ps1\"");
             curStep++;
             SetProg(curStep * 100 / totalSteps);
             Log("\u2713 \u5b89\u5168\u4e2d\u5fc3\u5e94\u7528\u5df2\u79fb\u9664");
@@ -515,7 +515,7 @@ namespace DefenderRemoverGUI
                 Log("\u6b63\u5728\u5220\u9664 (" + (i + 1) + "/" + dirs.Length + ")\uff1a" + dirs[i]);
                 string d = dirs[i];
                 string ps = "-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command \"takeown /f '' + d + '' /r /d y; icacls '' + d + '' /grant administrators:F /t; Remove-Item -LiteralPath '' + d + '' -Recurse -Force -ErrorAction SilentlyContinue\"";
-                Run("PowerRun.exe", "powershell.exe " + ps);
+                Run("PowerRun.exe", "RunHidden.exe powershell.exe " + ps);
                 curStep++;
                 SetProg(curStep * 100 / totalSteps);
             }
@@ -532,7 +532,7 @@ namespace DefenderRemoverGUI
             {
                 string name = Path.GetFileName(regs[i]);
                 Log("  (" + (i + 1) + "/" + regs.Length + ") " + name);
-                Run("PowerRun.exe", "regedit.exe /s \"" + regs[i] + "\"");
+                Run("PowerRun.exe", "RunHidden.exe regedit.exe /s \"" + regs[i] + "\"");
                 if (doubleApply) { Run("regedit.exe", "/s \"" + regs[i] + "\""); curStep += 2; }
                 else { curStep++; }
                 SetProg(curStep * 100 / totalSteps);

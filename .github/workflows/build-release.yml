@@ -62,6 +62,14 @@ jobs:
             --set-product-version '${{ steps.ver.outputs.v4 }}'
           Write-Host 'GUI version info set'
 
+      - name: Build RunHidden helper
+        shell: pwsh
+        run: |
+          $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          & $csc /nologo /optimize+ /out:RunHidden.exe /target:winexe sfx\RunHidden.cs 2>&1 | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { throw "RunHidden compile failed ($LASTEXITCODE)" }
+          Write-Host "RunHidden.exe: $((Get-Item 'RunHidden.exe').Length) bytes"
+
       - name: Build GUI SFX (standalone exe)
         shell: pwsh
         run: |
@@ -74,6 +82,7 @@ jobs:
           Copy-Item 'files_removal.bat' 'gui-payload\'
           Copy-Item 'RemoveSecHealthApp.ps1' 'gui-payload\'
           Copy-Item 'PowerRun.exe' 'gui-payload\'
+          Copy-Item 'RunHidden.exe' 'gui-payload\'
           Copy-Item 'Remove_Defender' 'gui-payload\Remove_Defender' -Recurse -Force
           Copy-Item 'Remove_SecurityComp' 'gui-payload\Remove_SecurityComp' -Recurse -Force
           # Create payload.zip
@@ -99,6 +108,7 @@ jobs:
           Copy-Item 'files_removal.bat' 'cli-payload\'
           Copy-Item 'RemoveSecHealthApp.ps1' 'cli-payload\'
           Copy-Item 'PowerRun.exe' 'cli-payload\'
+          Copy-Item 'RunHidden.exe' 'cli-payload\'
           Copy-Item 'Remove_Defender' 'cli-payload\Remove_Defender' -Recurse -Force
           Copy-Item 'Remove_SecurityComp' 'cli-payload\Remove_SecurityComp' -Recurse -Force
           Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -120,6 +130,7 @@ jobs:
           Copy-Item 'files_removal.bat' 'gui-staging\'
           Copy-Item 'RemoveSecHealthApp.ps1' 'gui-staging\'
           Copy-Item 'PowerRun.exe' 'gui-staging\'
+          Copy-Item 'RunHidden.exe' 'gui-staging\'
           Copy-Item 'Remove_Defender' 'gui-staging\Remove_Defender' -Recurse -Force
           Copy-Item 'Remove_SecurityComp' 'gui-staging\Remove_SecurityComp' -Recurse -Force
           Compress-Archive -Path "gui-staging\*" -DestinationPath "DefenderGUI_$tag.zip" -CompressionLevel Optimal

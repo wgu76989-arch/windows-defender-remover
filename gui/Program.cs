@@ -4,6 +4,7 @@ using System.IO;
 using System.Diagnostics;
 using System.Security.Principal;
 using System.Threading.Tasks;
+using System.Reflection;
 using System.Windows.Forms;
 
 namespace DefenderRemoverGUI
@@ -76,14 +77,37 @@ namespace DefenderRemoverGUI
         RichTextBox txtLog;
 
         string workDir;
+        Icon appIcon;
         bool running = false;
         int totalSteps, curStep;
 
         public MainForm()
         {
             workDir = Application.StartupPath;
+            LoadAppIcon();
             BuildUI();
             VerifyFiles();
+        }
+
+        void LoadAppIcon()
+        {
+            try
+            {
+                var asm = Assembly.GetExecutingAssembly();
+                var names = asm.GetManifestResourceNames();
+                foreach (var n in names)
+                {
+                    if (n.EndsWith("app_icon.ico"))
+                    {
+                        using (var s = asm.GetManifestResourceStream(n))
+                            appIcon = new Icon(s);
+                        return;
+                    }
+                }
+            }
+            catch { }
+            try { appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
+            catch { appIcon = SystemIcons.Application; }
         }
 
         void BuildUI()
@@ -96,6 +120,7 @@ namespace DefenderRemoverGUI
             MinimizeBox = false;
             BackColor = Cbg;
             ForeColor = Ctext;
+            if (appIcon != null) Icon = appIcon;
 
             // ---- header ----
             var header = new Panel { Location = new Point(0, 0), Size = new Size(560, 60), BackColor = Cpanel };
@@ -110,7 +135,7 @@ namespace DefenderRemoverGUI
                 Size = new Size(32, 32),
                 SizeMode = PictureBoxSizeMode.CenterImage
             };
-            try { pic.Image = Icon.ExtractAssociatedIcon(Application.ExecutablePath).ToBitmap(); }
+            try { if (appIcon != null) pic.Image = appIcon.ToBitmap(); }
             catch { }
             var title = new Label
             {

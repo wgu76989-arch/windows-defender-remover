@@ -47,7 +47,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-          & $csc /nologo /optimize+ /out:DefenderGUI.exe /win32icon:app_icon.ico /target:winexe gui\Program.cs 2>&1 | ForEach-Object { Write-Host $_ }
+          & $csc /nologo /optimize+ /out:DefenderGUI.exe /win32icon:app_icon.ico /resource:app_icon.ico,app_icon.ico /target:winexe gui\Program.cs 2>&1 | ForEach-Object { Write-Host $_ }
           if ($LASTEXITCODE -ne 0) { throw "csc.exe exited with code $LASTEXITCODE" }
           if (-not (Test-Path 'DefenderGUI.exe')) { throw 'Failed to compile DefenderGUI.exe' }
           Write-Host "DefenderGUI.exe: $((Get-Item 'DefenderGUI.exe').Length) bytes"

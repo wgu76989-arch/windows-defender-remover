@@ -32,21 +32,88 @@ jobs:
           "tag=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "Release version: $v"
 
-      - name: Package main tool
+      - name: Download 7-Zip Extra (SFX module)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-WebRequest -Uri 'https://www.7-zip.org/a/7z2501-extra.7z' -OutFile '7z-extra.7z' -UseBasicParsing
+          & 'C:\Program Files\7-Zip\7z.exe' x 7z-extra.7z -o7z-extra -y
+          $sfx = Get-ChildItem -Recurse '7z-extra' -Filter '7zSD.sfx' | Select-Object -First 1
+          if (-not $sfx) { throw '7zSD.sfx not found in 7-Zip Extra' }
+          Copy-Item $sfx.FullName '7zSD.sfx'
+          Write-Host "Got SFX module: $($sfx.FullName)"
+
+      - name: Download rcedit (icon setter)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri 'https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe' -OutFile 'rcedit.exe' -UseBasicParsing
+
+      - name: Stage files for SFX archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path 'sfx-staging' | Out-Null
+          $files = @(
+            'Script_Run.bat',
+            'files_removal.bat',
+            'RemoveSecHealthApp.ps1',
+            'PowerRun.exe'
+          )
+          foreach ($f in $files) {
+            Copy-Item $f "sfx-staging\$f" -Force
+          }
+          Copy-Item 'Remove_Defender' "sfx-staging\Remove_Defender" -Recurse -Force
+          Copy-Item 'Remove_SecurityComp' "sfx-staging\Remove_SecurityComp" -Recurse -Force
+          Write-Host 'Staged files:'
+          Get-ChildItem -Recurse sfx-staging | Select-Object FullName
+
+      - name: Build DefenderRemover.exe (7-Zip SFX)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Create 7z archive (no BOM, high compression)
+          Push-Location sfx-staging
+          & 'C:\Program Files\7-Zip\7z.exe' a -t7z -mx=9 '..\archive.7z' '*' | Out-Null
+          Pop-Location
+          # Create SFX config (UTF-8 without BOM, exact format)
+          $config = "`n;!@Install@!UTF-8!`nTitle=`"Defender Remover`"`nRunProgram=`"Script_Run.bat`"`n;!@InstallEnd@!`n"
+          [System.IO.File]::WriteAllText("$PWD\config.txt", $config, [System.Text.UTF8Encoding]::new($false))
+          # Concatenate: SFX module + config + 7z archive
+          $exeName = "DefenderRemover_${{ steps.ver.outputs.tag }}.exe"
+          $sfxBytes  = [System.IO.File]::ReadAllBytes('7zSD.sfx')
+          $cfgBytes  = [System.IO.File]::ReadAllBytes('config.txt')
+          $archBytes = [System.IO.File]::ReadAllBytes('archive.7z')
+          $combined  = New-Object byte[] ($sfxBytes.Length + $cfgBytes.Length + $archBytes.Length)
+          [Array]::Copy($sfxBytes, 0, $combined, 0, $sfxBytes.Length)
+          [Array]::Copy($cfgBytes, 0, $combined, $sfxBytes.Length, $cfgBytes.Length)
+          [Array]::Copy($archBytes, 0, $combined, $sfxBytes.Length + $cfgBytes.Length, $archBytes.Length)
+          [System.IO.File]::WriteAllBytes($exeName, $combined)
+          Write-Host "Created $exeName ($($combined.Length) bytes)"
+
+      - name: Set exe icon
+        shell: pwsh
+        run: |
+          $exeName = "DefenderRemover_${{ steps.ver.outputs.tag }}.exe"
+          if (Test-Path 'app_icon.ico') {
+            .\rcedit.exe $exeName --set-icon app_icon.ico
+            Write-Host 'Icon set successfully'
+          } else {
+            Write-Host 'app_icon.ico not found, skipping icon'
+          }
+
+      - name: Package main tool (zip)
         shell: pwsh
         run: |
           $staging = "staging\DefenderRemover_${{ steps.ver.outputs.tag }}"
           New-Item -ItemType Directory -Force -Path $staging | Out-Null
-          $exclude = @('.git', '.github', 'site-res', 'staging')
-          Get-ChildItem -Force | Where-Object { $exclude -notcontains $_.Name } | ForEach-Object {
+          $exclude = @('.git', '.github', 'site-res', 'staging', 'sfx-staging', '7z-extra')
+          Get-ChildItem -Force | Where-Object { $exclude -notcontains $_.Name -and $_.Name -notlike 'DefenderRemover_*' -and $_.Name -notlike 'ISOMaker_*' -and $_.Name -ne 'rcedit.exe' -and $_.Name -ne '7zSD.sfx' -and $_.Name -ne 'config.txt' -and $_.Name -ne 'archive.7z' -and $_.Name -ne '7z-extra.7z' -and $_.Name -ne 'SHA256SUMS.txt' } | ForEach-Object {
             Copy-Item -Path $_.FullName -Destination $staging -Recurse -Force
           }
           $zip = "DefenderRemover_${{ steps.ver.outputs.tag }}.zip"
           Compress-Archive -Path "$staging\*" -DestinationPath $zip -CompressionLevel Optimal
           Write-Host "Created $zip"
-          Get-ChildItem $zip | Format-List Name, Length
 
-      - name: Package ISO Maker
+      - name: Package ISO Maker (zip)
         shell: pwsh
         run: |
           $isoZip = "ISOMaker_${{ steps.ver.outputs.tag }}.zip"
@@ -64,6 +131,11 @@ jobs:
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
             "$hash  $($_.Name)" | Out-File -FilePath "SHA256SUMS.txt" -Append -Encoding ascii
           }
+          $exeFile = Get-ChildItem -Filter "DefenderRemover_${{ steps.ver.outputs.tag }}.exe" -ErrorAction SilentlyContinue
+          if ($exeFile) {
+            $hash = (Get-FileHash $exeFile.FullName -Algorithm SHA256).Hash
+            "$hash  $($exeFile.Name)" | Out-File -FilePath "SHA256SUMS.txt" -Append -Encoding ascii
+          }
           Get-Content "SHA256SUMS.txt"
 
       - name: Create release and upload assets
@@ -74,21 +146,23 @@ jobs:
           body: |
             ## Windows Defender Remover ${{ steps.ver.outputs.tag }}
 
-            Automated build from source.
+            Automated build from source via GitHub Actions.
 
             ### Downloads
-            - **DefenderRemover_${{ steps.ver.outputs.tag }}.zip** - Main tool (Script_Run.bat, registry files, PowerRun.exe)
+            - **DefenderRemover_${{ steps.ver.outputs.tag }}.exe** - Self-extracting executable (7-Zip SFX), runs Script_Run.bat automatically
+            - **DefenderRemover_${{ steps.ver.outputs.tag }}.zip** - Raw scripts (Script_Run.bat, registry files, PowerRun.exe)
             - **ISOMaker_${{ steps.ver.outputs.tag }}.zip** - Optional ISO integration files (autounattend.xml)
             - **SHA256SUMS.txt** - Checksums for all archives
 
-            ### Usage
-            1. Download and extract DefenderRemover_${{ steps.ver.outputs.tag }}.zip
-            2. Right-click Script_Run.bat and Run as administrator
+            ### Usage (exe)
+            1. Download DefenderRemover_${{ steps.ver.outputs.tag }}.exe
+            2. Right-click and Run as administrator
             3. Choose [Y] to remove Defender + Security App, or [A] to keep Security App
             4. Reboot when prompted
 
             Requires Windows 10/11. A System Restore point is recommended before use.
           prerelease: ${{ github.event.inputs.prerelease }}
           files: |
+            DefenderRemover_${{ steps.ver.outputs.tag }}.exe
             *.zip
             SHA256SUMS.txt

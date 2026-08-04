@@ -1,0 +1,94 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g. v13.1)'
+        required: true
+        default: 'v13.1'
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = '${{ github.event.inputs.version }}'.Trim()
+          if ($v -notmatch '^v') { $v = "v$v" }
+          "tag=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Release version: $v"
+
+      - name: Package main tool
+        shell: pwsh
+        run: |
+          $staging = "staging\DefenderRemover_${{ steps.ver.outputs.tag }}"
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          $exclude = @('.git', '.github', 'site-res', 'staging')
+          Get-ChildItem -Force | Where-Object { $exclude -notcontains $_.Name } | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination $staging -Recurse -Force
+          }
+          $zip = "DefenderRemover_${{ steps.ver.outputs.tag }}.zip"
+          Compress-Archive -Path "$staging\*" -DestinationPath $zip -CompressionLevel Optimal
+          Write-Host "Created $zip"
+          Get-ChildItem $zip | Format-List Name, Length
+
+      - name: Package ISO Maker
+        shell: pwsh
+        run: |
+          $isoZip = "ISOMaker_${{ steps.ver.outputs.tag }}.zip"
+          if (Test-Path "ISO_Maker") {
+            Compress-Archive -Path "ISO_Maker\*" -DestinationPath $isoZip -CompressionLevel Optimal
+            Write-Host "Created $isoZip"
+          } else {
+            Write-Host "ISO_Maker folder not found, skipping"
+          }
+
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem -Filter "*.zip" | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+            "$hash  $($_.Name)" | Out-File -FilePath "SHA256SUMS.txt" -Append -Encoding ascii
+          }
+          Get-Content "SHA256SUMS.txt"
+
+      - name: Create release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: "Windows Defender Remover ${{ steps.ver.outputs.tag }}"
+          body: |
+            ## Windows Defender Remover ${{ steps.ver.outputs.tag }}
+
+            Automated build from source.
+
+            ### Downloads
+            - **DefenderRemover_${{ steps.ver.outputs.tag }}.zip** - Main tool (Script_Run.bat, registry files, PowerRun.exe)
+            - **ISOMaker_${{ steps.ver.outputs.tag }}.zip** - Optional ISO integration files (autounattend.xml)
+            - **SHA256SUMS.txt** - Checksums for all archives
+
+            ### Usage
+            1. Download and extract DefenderRemover_${{ steps.ver.outputs.tag }}.zip
+            2. Right-click Script_Run.bat and Run as administrator
+            3. Choose [Y] to remove Defender + Security App, or [A] to keep Security App
+            4. Reboot when prompted
+
+            Requires Windows 10/11. A System Restore point is recommended before use.
+          prerelease: ${{ github.event.inputs.prerelease }}
+          files: |
+            *.zip
+            SHA256SUMS.txt

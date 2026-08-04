@@ -29,84 +29,84 @@ jobs:
         run: |
           $v = '${{ github.event.inputs.version }}'.Trim()
           if ($v -notmatch '^v') { $v = "v$v" }
+          $vnum = $v -replace '^v', ''
+          $vparts = ($vnum -split '\.')
+          while ($vparts.Count -lt 4) { $vparts += '0' }
+          $v4 = ($vparts[0..3] -join '.')
           "tag=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "Release version: $v"
+          "vnum=$vnum" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "v4=$v4" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      - name: Download 7-Zip Extra (SFX module)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Invoke-WebRequest -Uri 'https://www.7-zip.org/a/7z2501-extra.7z' -OutFile '7z-extra.7z' -UseBasicParsing
-          & 'C:\Program Files\7-Zip\7z.exe' x 7z-extra.7z -o7z-extra -y
-          $sfx = Get-ChildItem -Recurse '7z-extra' -Filter '7zSD.sfx' | Select-Object -First 1
-          if (-not $sfx) { throw '7zSD.sfx not found in 7-Zip Extra' }
-          Copy-Item $sfx.FullName '7zSD.sfx'
-          Write-Host "Got SFX module: $($sfx.FullName)"
-
-      - name: Download rcedit (icon setter)
+      - name: Download rcedit
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri 'https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe' -OutFile 'rcedit.exe' -UseBasicParsing
 
-      - name: Stage files for SFX archive
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path 'sfx-staging' | Out-Null
-          $files = @(
-            'Script_Run.bat',
-            'files_removal.bat',
-            'RemoveSecHealthApp.ps1',
-            'PowerRun.exe'
-          )
-          foreach ($f in $files) {
-            Copy-Item $f "sfx-staging\$f" -Force
-          }
-          Copy-Item 'Remove_Defender' "sfx-staging\Remove_Defender" -Recurse -Force
-          Copy-Item 'Remove_SecurityComp' "sfx-staging\Remove_SecurityComp" -Recurse -Force
-          Write-Host 'Staged files:'
-          Get-ChildItem -Recurse sfx-staging | Select-Object FullName
-
-      - name: Build DefenderRemover.exe (7-Zip SFX)
+      - name: Build DefenderRemover.exe
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Create 7z archive (no BOM, high compression)
-          Push-Location sfx-staging
-          & 'C:\Program Files\7-Zip\7z.exe' a -t7z -mx=9 '..\archive.7z' '*' | Out-Null
-          Pop-Location
-          # Create SFX config (UTF-8 without BOM, exact format)
-          $config = "`n;!@Install@!UTF-8!`nTitle=`"Defender Remover`"`nRunProgram=`"Script_Run.bat`"`n;!@InstallEnd@!`n"
-          [System.IO.File]::WriteAllText("$PWD\config.txt", $config, [System.Text.UTF8Encoding]::new($false))
-          # Concatenate: SFX module + config + 7z archive
-          $exeName = "DefenderRemover_${{ steps.ver.outputs.tag }}.exe"
-          $sfxBytes  = [System.IO.File]::ReadAllBytes('7zSD.sfx')
-          $cfgBytes  = [System.IO.File]::ReadAllBytes('config.txt')
-          $archBytes = [System.IO.File]::ReadAllBytes('archive.7z')
-          $combined  = New-Object byte[] ($sfxBytes.Length + $cfgBytes.Length + $archBytes.Length)
-          [Array]::Copy($sfxBytes, 0, $combined, 0, $sfxBytes.Length)
-          [Array]::Copy($cfgBytes, 0, $combined, $sfxBytes.Length, $cfgBytes.Length)
-          [Array]::Copy($archBytes, 0, $combined, $sfxBytes.Length + $cfgBytes.Length, $archBytes.Length)
-          [System.IO.File]::WriteAllBytes($exeName, $combined)
-          Write-Host "Created $exeName ($($combined.Length) bytes)"
 
-      - name: Set exe icon
-        shell: pwsh
-        run: |
-          $exeName = "DefenderRemover_${{ steps.ver.outputs.tag }}.exe"
-          if (Test-Path 'app_icon.ico') {
-            .\rcedit.exe $exeName --set-icon app_icon.ico
-            Write-Host 'Icon set successfully'
-          } else {
-            Write-Host 'app_icon.ico not found, skipping icon'
-          }
+          # Stage files for payload
+          New-Item -ItemType Directory -Force -Path 'payload' | Out-Null
+          Copy-Item 'Script_Run.bat' 'payload\'
+          Copy-Item 'files_removal.bat' 'payload\'
+          Copy-Item 'RemoveSecHealthApp.ps1' 'payload\'
+          Copy-Item 'PowerRun.exe' 'payload\'
+          Copy-Item 'Remove_Defender' 'payload\Remove_Defender' -Recurse -Force
+          Copy-Item 'Remove_SecurityComp' 'payload\Remove_SecurityComp' -Recurse -Force
 
-      - name: Package main tool (zip)
+          # Create payload.zip
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            "$PWD\payload", "$PWD\payload.zip",
+            [System.IO.Compression.CompressionLevel]::Optimal, $false)
+          Write-Host "payload.zip: $((Get-Item 'payload.zip').Length) bytes"
+
+          # Find System.IO.Compression.dll in GAC
+          $compDll = (Get-ChildItem 'C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.IO.Compression' -Recurse -Filter 'System.IO.Compression.dll' | Select-Object -First 1).FullName
+          if (-not $compDll) { throw 'System.IO.Compression.dll not found in GAC' }
+
+          # Compile with .NET Framework csc.exe
+          $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          $exeName = "DefenderRemover_${{ steps.ver.outputs.tag }}.exe"
+          & $csc /nologo /optimize+ `
+            "/out:$exeName" `
+            "/reference:$compDll" `
+            '/resource:payload.zip' `
+            '/win32icon:app_icon.ico' `
+            '/target:exe' `
+            'sfx\Program.cs' 2>&1 | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { throw "csc.exe exited with code $LASTEXITCODE" }
+          if (-not (Test-Path $exeName)) { throw "Failed to compile $exeName" }
+          Write-Host "Created $exeName ($((Get-Item $exeName).Length) bytes)"
+
+          # Set version info
+          .\rcedit.exe $exeName `
+            --set-version-string 'ProductName' 'Defender Remover' `
+            --set-version-string 'CompanyName' 'Gallery Inc' `
+            --set-version-string 'FileDescription' 'Defender Remover' `
+            --set-version-string 'LegalCopyright' 'Gallery Inc' `
+            --set-version-string 'FileVersion' '${{ steps.ver.outputs.vnum }}' `
+            --set-version-string 'ProductVersion' '${{ steps.ver.outputs.vnum }}' `
+            --set-file-version '${{ steps.ver.outputs.v4 }}' `
+            --set-product-version '${{ steps.ver.outputs.v4 }}'
+          Write-Host "Version info set"
+
+      - name: Package raw scripts (zip)
         shell: pwsh
         run: |
           $staging = "staging\DefenderRemover_${{ steps.ver.outputs.tag }}"
           New-Item -ItemType Directory -Force -Path $staging | Out-Null
-          $exclude = @('.git', '.github', 'site-res', 'staging', 'sfx-staging', '7z-extra')
-          Get-ChildItem -Force | Where-Object { $exclude -notcontains $_.Name -and $_.Name -notlike 'DefenderRemover_*' -and $_.Name -notlike 'ISOMaker_*' -and $_.Name -ne 'rcedit.exe' -and $_.Name -ne '7zSD.sfx' -and $_.Name -ne 'config.txt' -and $_.Name -ne 'archive.7z' -and $_.Name -ne '7z-extra.7z' -and $_.Name -ne 'SHA256SUMS.txt' } | ForEach-Object {
+          $exclude = @('.git', '.github', 'site-res', 'staging', 'sfx', 'payload')
+          Get-ChildItem -Force | Where-Object {
+            $exclude -notcontains $_.Name -and
+            $_.Name -notlike 'DefenderRemover_*' -and
+            $_.Name -notlike 'ISOMaker_*' -and
+            $_.Name -ne 'rcedit.exe' -and
+            $_.Name -ne 'payload.zip' -and
+            $_.Name -ne 'SHA256SUMS.txt'
+          } | ForEach-Object {
             Copy-Item -Path $_.FullName -Destination $staging -Recurse -Force
           }
           $zip = "DefenderRemover_${{ steps.ver.outputs.tag }}.zip"
@@ -120,8 +120,6 @@ jobs:
           if (Test-Path "ISO_Maker") {
             Compress-Archive -Path "ISO_Maker\*" -DestinationPath $isoZip -CompressionLevel Optimal
             Write-Host "Created $isoZip"
-          } else {
-            Write-Host "ISO_Maker folder not found, skipping"
           }
 
       - name: Generate checksums
@@ -149,10 +147,10 @@ jobs:
             Automated build from source via GitHub Actions.
 
             ### Downloads
-            - **DefenderRemover_${{ steps.ver.outputs.tag }}.exe** - Self-extracting executable (7-Zip SFX), runs Script_Run.bat automatically
+            - **DefenderRemover_${{ steps.ver.outputs.tag }}.exe** - Standalone executable (self-extracting, runs Script_Run.bat automatically)
             - **DefenderRemover_${{ steps.ver.outputs.tag }}.zip** - Raw scripts (Script_Run.bat, registry files, PowerRun.exe)
-            - **ISOMaker_${{ steps.ver.outputs.tag }}.zip** - Optional ISO integration files (autounattend.xml)
-            - **SHA256SUMS.txt** - Checksums for all archives
+            - **ISOMaker_${{ steps.ver.outputs.tag }}.zip** - ISO integration files
+            - **SHA256SUMS.txt** - Checksums for all files
 
             ### Usage (exe)
             1. Download DefenderRemover_${{ steps.ver.outputs.tag }}.exe
